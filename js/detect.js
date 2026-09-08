@@ -42,6 +42,11 @@ async function dtRun() {
 
   try {
     const detector = await AI.getDetector(uiProgress(dtStatus));
+    if (!dtSeq.isCurrent(token)) return;
+
+    // El modelo ya está listo: se recupera el mensaje de trabajo, que el aviso
+    // de descarga puede haber sobrescrito.
+    uiStatus(dtStatus, 'st.detecting', null, 'busy');
     const results = await detector.detect(text);
     if (!dtSeq.isCurrent(token)) return;
 

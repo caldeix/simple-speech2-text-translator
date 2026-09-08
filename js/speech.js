@@ -11,18 +11,34 @@ let spBtnRecord, spBtnClear, spTranscriptTA, spTranslationTA, spStatusEl,
 // el auto-reinicio de onend entra en bucle start → error → end → start.
 const SP_FATAL_ERRORS = ['not-allowed', 'service-not-allowed', 'audio-capture', 'language-not-supported'];
 
+// Espera tras dejar de teclear antes de traducir el texto escrito a mano.
+const SP_MANUAL_DELAY = 600;
+
 let spRecognition = null;
 let spIsRecording = false;         // intención del usuario, no estado del micro
-let spFinalText = '';
+
+// El texto vive en dos mitades: lo consolidado de sesiones anteriores y lo que
+// la sesión actual va produciendo, que se RECALCULA en cada evento.
+let spBaseText = '';
+let spSessionFinal = '';
+let spSessionInterim = '';
+let spSessionSent = 0;             // nº de frases cerradas ya enviadas a traducir
+
 let spFinalTranslation = '';
 let spTranslator = null;
 let spTranslatorReady = Promise.resolve(null);   // resuelve cuando el modelo está listo
 let spInterimTimer = null;
+let spManualTimer = null;
 let spLastInterimWords = 0;
 
-let spInterimSeq = null;           // sequencer de provisionales (se crea en spInit)
+let spInterimSeq = null;           // sequencers (se crean en spInit)
+let spManualSeq = null;
 let spFinalQueue = Promise.resolve();
 let spPendingFinals = 0;
+
+function spVisibleText() {
+  return spBaseText + spSessionFinal + spSessionInterim;
+}
 
 // ── Reconocedor ───────────────────────────────────────────────────────────
 function spBuild() {
@@ -45,6 +61,8 @@ function spBuild() {
   };
 
   r.onend = () => {
+    // Al terminar la sesión hay que consolidar lo que Chrome va a descartar.
+    spCommitSession();
     // Chrome corta el reconocimiento por su cuenta cada ~1 min: se reenciende.
     // `spRecognition === r` evita que una instancia ya sustituida se resucite
     // y acabe escuchando en paralelo con la nueva.
@@ -61,31 +79,61 @@ function spBuild() {
   };
 
   r.onresult = (event) => {
-    let interim = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
+    // `event.results` es acumulativo dentro de una sesión, y Chrome —sobre todo
+    // en Android— puede reenviar resultados ya vistos con resultIndex 0. Por eso
+    // NO se acumula con +=: se recalcula el texto de la sesión completo en cada
+    // evento. Es idempotente, así que un reenvío no puede duplicar frases.
+    let fin = '', interim = '', nFinal = 0;
+    for (let i = 0; i < event.results.length; i++) {
       const txt = event.results[i][0].transcript;
       if (event.results[i].isFinal) {
-        spAppendFinal(txt.trim());
-        spLastInterimWords = 0;
-        clearTimeout(spInterimTimer);
-        spInterimSeq.invalidate();      // lo provisional en vuelo ya no vale
-        if (spChkTranslate.checked) spQueueFinal(txt.trim());
+        fin += txt.trim() + ' ';
+        nFinal = i + 1;
       } else {
         interim += txt;
       }
     }
-    spTranscriptTA.value = spFinalText + interim;
+
+    spSessionFinal = fin;
+    spSessionInterim = interim;
+    spTranscriptTA.value = spVisibleText();
+    stSet('transcript', spTranscriptTA.value);
+
+    // A traducir van solo las frases cerradas que no se hubieran enviado ya en
+    // esta sesión: llevar la cuenta, y no el texto, es lo que evita duplicados.
+    if (nFinal > spSessionSent) {
+      for (let i = spSessionSent; i < nFinal; i++) {
+        if (!event.results[i].isFinal) continue;
+        if (spChkTranslate.checked) spQueueFinal(event.results[i][0].transcript.trim());
+      }
+      spSessionSent = nFinal;
+      spLastInterimWords = 0;
+      clearTimeout(spInterimTimer);
+      spInterimSeq.invalidate();      // lo provisional en vuelo ya no vale
+    }
+
     if (interim && spChkTranslate.checked) spScheduleInterim(interim);
   };
 
   return r;
 }
 
-function spAppendFinal(phrase) {
-  if (!phrase) return;
-  const sep = spFinalText && !/\s$/.test(spFinalText) ? ' ' : '';
-  spFinalText += sep + phrase + ' ';
-  stSet('transcript', spFinalText);
+// Cuando una sesión termina, Chrome DESCARTA el texto provisional que no llegó
+// a cerrarse (ocurre con el corte de ~1 min y con las pausas largas). Se
+// consolida aquí para que no desaparezca de la pantalla, y se manda a traducir
+// porque nadie más lo va a hacer.
+function spCommitSession() {
+  const pending = spSessionInterim.trim();
+  const add = spSessionFinal + (pending ? pending + ' ' : '');
+
+  if (add) {
+    const sep = spBaseText && !/\s$/.test(spBaseText) ? ' ' : '';
+    spBaseText += sep + add;
+    stSet('transcript', spBaseText);
+  }
+  if (pending && spChkTranslate.checked) spQueueFinal(pending);
+
+  spResetSession();
 }
 
 function spStart() {
@@ -95,6 +143,9 @@ function spStart() {
   if (spChkTranslate.checked) spInitTranslator();
   const r = spBuild();
   if (!r) return;
+
+  clearTimeout(spManualTimer);
+  spManualSeq.invalidate();     // una traducción de texto escrito ya no interesa
 
   spRecognition = r;
   spIsRecording = true;
@@ -114,6 +165,9 @@ function spStop() {
   spIsRecording = false;
 
   if (spRecognition) {
+    // Se consolida antes de desconectar: con los handlers a null onend ya no
+    // llegará, y el provisional pendiente se perdería.
+    spCommitSession();
     // Los handlers se desconectan ANTES de stop(): stop() no es inmediato y su
     // onend llegaría después, reenviándonos al auto-reinicio.
     spRecognition.onend = null;
@@ -126,7 +180,6 @@ function spStop() {
 
   clearTimeout(spInterimTimer);
   spInterimSeq.invalidate();
-  spLastInterimWords = 0;
   spSetLocked(false);
   i18nSet(spBtnRecord, 'btn.record');
   spBtnRecord.classList.remove('active');
@@ -210,12 +263,72 @@ function spScheduleInterim(interim) {
   }, 200);
 }
 
+// ── Traducción del texto escrito a mano ───────────────────────────────────
+// La regla es "lo que haya en la caja se traduce", venga de la voz o del
+// teclado. Al editar hay que retraducir el texto ENTERO: una palabra cambiada
+// en medio invalida la frase que la contiene, así que la traducción construida
+// frase a frase ya no sirve.
+function spScheduleManual() {
+  clearTimeout(spManualTimer);
+  spManualTimer = setTimeout(spTranslateManual, SP_MANUAL_DELAY);
+}
+
+async function spTranslateManual() {
+  if (spIsRecording || !spChkTranslate.checked) return;
+
+  const text = spTranscriptTA.value.trim();
+  const token = spManualSeq.next();
+
+  if (!text) {
+    spFinalTranslation = '';
+    spRender();
+    stRemove('translation');
+    return;
+  }
+
+  const from = spLangFrom.value.split('-')[0];
+  const to = spLangTo.value;
+  if (from === to) {
+    uiStatus(spTranslateStatus, 'st.sameLangNoop', null, 'info');
+    return;
+  }
+
+  // Puede no haberse pulsado Grabar nunca en esta sesión: el traductor se crea
+  // aquí, y si falta el modelo se descarga mostrando el porcentaje.
+  if (!spTranslator) spInitTranslator();
+
+  const translator = await spTranslatorReady;
+  if (!translator || !spManualSeq.isCurrent(token)) return;
+
+  uiStatus(spTranslateStatus, 'st.translating', null, 'busy');
+  try {
+    const out = await translator.translate(text);
+    if (!spManualSeq.isCurrent(token)) return;
+    spFinalTranslation = out + ' ';
+    spRender();
+    stSet('translation', spFinalTranslation);
+    uiStatus(spTranslateStatus, 'st.translated', { from, to }, 'ok');
+  } catch (e) {
+    if (!spManualSeq.isCurrent(token)) return;
+    uiStatusError(spTranslateStatus, e);
+  }
+}
+
 // ── Limpieza ──────────────────────────────────────────────────────────────
+function spResetSession() {
+  spSessionFinal = '';
+  spSessionInterim = '';
+  spSessionSent = 0;
+  spLastInterimWords = 0;
+}
+
 function spClearAll() {
   clearTimeout(spInterimTimer);
+  clearTimeout(spManualTimer);
   spInterimSeq.invalidate();
-  spLastInterimWords = 0;
-  spFinalText = '';
+  spManualSeq.invalidate();
+  spResetSession();
+  spBaseText = '';
   spFinalTranslation = '';
   spTranscriptTA.value = '';
   spTranslationTA.value = '';
@@ -224,7 +337,9 @@ function spClearAll() {
 }
 
 function spClearTranslation() {
+  clearTimeout(spManualTimer);
   spInterimSeq.invalidate();
+  spManualSeq.invalidate();
   spFinalTranslation = '';
   spTranslationTA.value = '';
   stRemove('translation');
@@ -244,6 +359,7 @@ function spInit() {
   spTranslationBlock= document.getElementById('translationBlock');
 
   spInterimSeq = AI.sequencer();
+  spManualSeq  = AI.sequencer();
 
   // Selectores desde la lista única de idiomas, con lo último elegido.
   lgFillSelect(spLangFrom, 'speech', stGet('langFrom', 'es-ES'));
@@ -252,11 +368,11 @@ function spInit() {
   spTranslationBlock.classList.toggle('hidden', !spChkTranslate.checked);
 
   // Sesión anterior: la transcripción no se pierde por una recarga.
-  spFinalText = stGet('transcript', '') || '';
+  spBaseText = stGet('transcript', '') || '';
   spFinalTranslation = stGet('translation', '') || '';
-  spTranscriptTA.value = spFinalText;
+  spTranscriptTA.value = spBaseText;
   spTranslationTA.value = spFinalTranslation;
-  if (spFinalText || spFinalTranslation) uiStatus(spStatusEl, 'st.restored', null, 'info');
+  if (spBaseText || spFinalTranslation) uiStatus(spStatusEl, 'st.restored', null, 'info');
   else uiStatus(spStatusEl, 'st.ready', null, 'info');
 
   spBtnRecord.addEventListener('click', () => {
@@ -267,12 +383,15 @@ function spInit() {
   spBtnClear.addEventListener('click', spClearAll);
 
   // Con la grabación parada el usuario puede corregir a mano: su texto pasa a
-  // ser la nueva base para que el siguiente resultado no lo pise.
+  // ser la nueva base, y se retraduce tras la pausa al teclear.
   spTranscriptTA.addEventListener('input', () => {
     if (spIsRecording) return;
-    spFinalText = spTranscriptTA.value;
-    stSet('transcript', spFinalText);
+    spResetSession();
+    spBaseText = spTranscriptTA.value;
+    stSet('transcript', spBaseText);
+    spScheduleManual();
   });
+
   spTranslationTA.addEventListener('input', () => {
     if (spIsRecording) return;
     spFinalTranslation = spTranslationTA.value;
@@ -282,7 +401,7 @@ function spInit() {
   // Cambiar el idioma ORIGEN invalida lo dictado: lo que venga será otro idioma.
   spLangFrom.addEventListener('change', () => {
     stSet('langFrom', spLangFrom.value);
-    const hadText = spFinalText || spFinalTranslation;
+    const hadText = spBaseText || spFinalTranslation;
     spClearAll();
     spTranslator = null;
     spTranslatorReady = Promise.resolve(null);
@@ -307,7 +426,9 @@ function spInit() {
     spTranslationBlock.classList.toggle('hidden', !spChkTranslate.checked);
     if (!spChkTranslate.checked) {
       clearTimeout(spInterimTimer);
+      clearTimeout(spManualTimer);
       spInterimSeq.invalidate();
+      spManualSeq.invalidate();
     }
   });
 }

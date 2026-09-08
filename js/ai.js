@@ -26,8 +26,12 @@ const AI = (function () {
 
   // Progreso de descarga. El evento reporta 'loaded' de 0 a 1 (algunas
   // versiones traen loaded/total), así que se normaliza a 0-100.
-  function monitorOpt(onProgress) {
-    if (!onProgress) return {};
+  //
+  // Solo se engancha cuando availability() ha dicho que hay descarga pendiente:
+  // con el modelo ya en disco, Chrome dispara igualmente un downloadprogress
+  // con valor 1, y anunciar "descargando 100%" cada vez es desinformar.
+  function monitorOpt(needed, onProgress) {
+    if (!needed || !onProgress) return {};
     return {
       monitor(m) {
         m.addEventListener('downloadprogress', e => {
@@ -68,11 +72,12 @@ const AI = (function () {
       return cached(translators, from + '→' + to, async () => {
         const avail = await Translator.availability({ sourceLanguage: from, targetLanguage: to });
         if (avail === 'unavailable') throw aiError('err.pairUnsupported', { from, to });
-        if (needsDownload(avail) && onProgress) onProgress(null);
+        const needed = needsDownload(avail);
+        if (needed && onProgress) onProgress(null);
         const inst = await Translator.create({
           sourceLanguage: from,
           targetLanguage: to,
-          ...monitorOpt(onProgress),
+          ...monitorOpt(needed, onProgress),
         });
         return whenReady(inst);
       });
@@ -88,8 +93,9 @@ const AI = (function () {
         let avail = 'available';
         try { avail = await Summarizer.availability({ type, format, length }); } catch {}
         if (avail === 'unavailable') throw aiError('err.modelUnavailable');
-        if (needsDownload(avail) && onProgress) onProgress(null);
-        return whenReady(await Summarizer.create({ ...opts, ...monitorOpt(onProgress) }));
+        const needed = needsDownload(avail);
+        if (needed && onProgress) onProgress(null);
+        return whenReady(await Summarizer.create({ ...opts, ...monitorOpt(needed, onProgress) }));
       });
     },
 
@@ -102,8 +108,9 @@ const AI = (function () {
           let avail = 'available';
           try { avail = await LanguageDetector.availability(); } catch {}
           if (avail === 'unavailable') throw aiError('err.modelUnavailable');
-          if (needsDownload(avail) && onProgress) onProgress(null);
-          return whenReady(await LanguageDetector.create({ ...monitorOpt(onProgress) }));
+          const needed = needsDownload(avail);
+          if (needed && onProgress) onProgress(null);
+          return whenReady(await LanguageDetector.create({ ...monitorOpt(needed, onProgress) }));
         })();
         detectorPromise.catch(() => { detectorPromise = null; });
       }

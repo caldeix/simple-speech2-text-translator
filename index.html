@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Dicta, transcribe y traduce en tiempo real en el navegador, con las APIs de IA integradas en Chrome. Sin servidores ni claves de API.">
+<title>Speech → Transcribe → Translate</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="css/styles.css">
+
+<!-- Scripts clásicos con defer: se ejecutan EN ORDEN, con el DOM ya
+     construido, y comparten el scope global. -->
+<script defer src="js/store.js"></script>
+<script defer src="js/languages.js"></script>
+<script defer src="js/i18n.js"></script>
+<script defer src="js/ai.js"></script>
+<script defer src="js/ui.js"></script>
+<script defer src="js/speech.js"></script>
+<script defer src="js/detect.js"></script>
+<script defer src="js/summarize.js"></script>
+<script defer src="js/translate.js"></script>
+<script defer src="js/device-info.js"></script>
+<script defer src="js/main.js"></script>
+</head>
+<body>
+
+<nav id="nav" role="tablist">
+  <button type="button" role="tab" class="nav-active" aria-selected="true" data-target="sec-speech">
+    <span class="nav-icon">🎙</span><span class="nav-label" data-i18n="nav.speech">Voz → Texto → Traducción</span>
+  </button>
+  <button type="button" role="tab" aria-selected="false" data-target="sec-detect">
+    <span class="nav-icon">🔍</span><span class="nav-label" data-i18n="nav.detect">Detectar idioma</span>
+  </button>
+  <button type="button" role="tab" aria-selected="false" data-target="sec-summary">
+    <span class="nav-icon">📝</span><span class="nav-label" data-i18n="nav.summary">Resumidor</span>
+  </button>
+  <button type="button" role="tab" aria-selected="false" data-target="sec-translate">
+    <span class="nav-icon">🌐</span><span class="nav-label" data-i18n="nav.translate">Traducción</span>
+  </button>
+</nav>
+
+<main>
+
+<!-- ══ SECCIÓN 1: VOZ ══ -->
+<section id="sec-speech" class="section visible">
+  <h2><span class="h2-icon">🎙</span> <span data-i18n="nav.speech">Voz → Texto → Traducción</span></h2>
+
+  <div class="row">
+    <div class="field">
+      <label for="langFrom" data-i18n="lbl.langFrom">Idioma origen (voz)</label>
+      <select id="langFrom"></select>
+    </div>
+    <div class="field">
+      <label for="langTo" data-i18n="lbl.langTo">Idioma destino (traducción)</label>
+      <select id="langTo"></select>
+    </div>
+    <div class="field field-actions">
+      <button type="button" id="btnRecord" data-i18n="btn.record">▶ Grabar</button>
+      <button type="button" id="btnClear" data-i18n="btn.clear">🗑 Limpiar</button>
+    </div>
+    <div class="field field-actions">
+      <label class="check-label">
+        <input type="checkbox" id="chkTranslate" checked>
+        <span data-i18n="chk.realtime">Traducción en tiempo real</span>
+      </label>
+    </div>
+  </div>
+
+  <div id="speechStatus" class="status status-info" role="status" aria-live="polite" data-i18n="st.ready">Listo.</div>
+
+  <label for="transcript" data-i18n="lbl.transcript">Transcripción</label>
+  <textarea id="transcript" class="ta" rows="8" data-i18n-ph="ph.transcript"
+            placeholder="El texto aparecerá aquí mientras hablas..."></textarea>
+
+  <div id="translationBlock">
+    <div id="translateStatus" class="status status-info" role="status" aria-live="polite"></div>
+    <label for="translation" data-i18n="lbl.translation">Traducción en tiempo real</label>
+    <textarea id="translation" class="ta" rows="8" data-i18n-ph="ph.translation"
+              placeholder="La traducción aparecerá aquí..."></textarea>
+  </div>
+</section>
+
+<!-- ══ SECCIÓN 2: DETECTAR IDIOMA ══ -->
+<section id="sec-detect" class="section">
+  <h2><span class="h2-icon">🔍</span> <span data-i18n="nav.detect">Detectar idioma</span></h2>
+
+  <label for="detectInput" data-i18n="lbl.detectInput">Pega o escribe un texto para detectar su idioma</label>
+  <textarea id="detectInput" class="ta ta-sm" rows="5" data-i18n-ph="ph.detectInput"
+            placeholder="Escribe aquí el texto a analizar..."></textarea>
+
+  <div class="actions">
+    <button type="button" id="btnDetect" data-i18n="btn.detect">🔎 Detectar idioma</button>
+    <span id="detectStatus" class="status" role="status" aria-live="polite"></span>
+  </div>
+
+  <div id="detectResult" class="hidden">
+    <label data-i18n="lbl.detectResults">Resultados de detección</label>
+    <div class="table-scroll">
+      <table id="detectTable">
+        <thead>
+          <tr>
+            <th data-i18n="th.language">Idioma</th>
+            <th data-i18n="th.code">Código</th>
+            <th data-i18n="th.confidence">Confianza</th>
+            <th class="th-bar" data-i18n="th.bar">Barra</th>
+          </tr>
+        </thead>
+        <tbody id="detectTbody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ══ SECCIÓN 3: RESUMIDOR ══ -->
+<section id="sec-summary" class="section">
+  <h2><span class="h2-icon">📝</span> <span data-i18n="nav.summary">Resumidor</span></h2>
+
+  <div class="row">
+    <div class="field">
+      <label for="summaryType" data-i18n="lbl.summaryType">Tipo de resumen</label>
+      <select id="summaryType">
+        <option value="tldr" data-i18n="opt.tldr">TL;DR</option>
+        <option value="key-points" data-i18n="opt.keyPoints">Puntos clave</option>
+        <option value="teaser" data-i18n="opt.teaser">Teaser</option>
+        <option value="headline" data-i18n="opt.headline">Titular</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="summaryFormat" data-i18n="lbl.summaryFormat">Formato</label>
+      <select id="summaryFormat">
+        <option value="plain-text" data-i18n="opt.plainText">Texto plano</option>
+        <option value="markdown" data-i18n="opt.markdown">Markdown</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="summaryLength" data-i18n="lbl.summaryLength">Longitud</label>
+      <select id="summaryLength">
+        <option value="short" data-i18n="opt.short">Corto</option>
+        <option value="medium" selected data-i18n="opt.medium">Medio</option>
+        <option value="long" data-i18n="opt.long">Largo</option>
+      </select>
+    </div>
+  </div>
+
+  <label for="summaryInput" data-i18n="lbl.summaryInput">Texto a resumir</label>
+  <textarea id="summaryInput" class="ta" rows="7" data-i18n-ph="ph.summaryInput"
+            placeholder="Pega aquí el texto que quieres resumir..."></textarea>
+
+  <div class="actions">
+    <button type="button" id="btnSummarize" data-i18n="btn.summarize">✨ Resumir</button>
+    <span id="summaryStatus" class="status" role="status" aria-live="polite"></span>
+  </div>
+
+  <div id="summaryResultWrap" class="hidden">
+    <label for="summaryOutput" data-i18n="lbl.result">Resultado</label>
+    <textarea id="summaryOutput" class="ta" rows="5" readonly></textarea>
+  </div>
+</section>
+
+<!-- ══ SECCIÓN 4: TRADUCCIÓN ══ -->
+<section id="sec-translate" class="section">
+  <h2><span class="h2-icon">🌐</span> <span data-i18n="nav.translate">Traducción</span></h2>
+
+  <div class="row">
+    <div class="field">
+      <label for="trFromLang" data-i18n="lbl.trFrom">Idioma origen</label>
+      <select id="trFromLang"></select>
+    </div>
+    <div class="field">
+      <label for="trToLang" data-i18n="lbl.trTo">Idioma destino</label>
+      <select id="trToLang"></select>
+    </div>
+  </div>
+
+  <label for="trInput" data-i18n="lbl.trInput">Texto a traducir</label>
+  <textarea id="trInput" class="ta" rows="7" data-i18n-ph="ph.trInput"
+            placeholder="Escribe o pega aquí el texto..."></textarea>
+
+  <div class="actions">
+    <button type="button" id="btnTranslate" data-i18n="btn.translate">🌐 Traducir</button>
+    <span id="trStatus" class="status" role="status" aria-live="polite"></span>
+  </div>
+
+  <div id="trResultWrap" class="hidden">
+    <label for="trOutput" data-i18n="lbl.result">Resultado</label>
+    <textarea id="trOutput" class="ta" rows="7" readonly></textarea>
+  </div>
+</section>
+
+</main>
+
+<!-- ══ PANELES: fijos en escritorio, plegables en móvil y tablet ══ -->
+<div id="panels" class="panels">
+  <button type="button" id="panelsToggle" class="panels-toggle" aria-expanded="true"
+          data-i18n="panel.toggle">ℹ Información</button>
+
+  <div class="panels-inner">
+    <div class="info-panel">
+      <div class="info-panel-title" data-i18n="dv.title">DEVICE INFO</div>
+      <div id="info-chrome" class="chk"></div>
+      <div id="info-mic" class="chk"></div>
+      <div class="info-panel-group">
+        <div id="info-translator" class="chk"></div>
+        <div id="info-detector" class="chk"></div>
+        <div id="info-summarizer" class="chk"></div>
+      </div>
+      <div class="info-panel-group">
+        <label for="uiLang" class="info-panel-sub" data-i18n="dv.uiLang">IDIOMA INTERFAZ</label>
+        <select id="uiLang"></select>
+      </div>
+    </div>
+
+    <div class="info-panel">
+      <div class="info-panel-title" data-i18n="info.title">SECCIÓN ACTIVA</div>
+      <div id="sectionInfoName" class="info-panel-name"></div>
+      <div id="sectionInfoDesc" class="info-panel-desc"></div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

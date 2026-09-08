@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <style>
+    .bg   { fill: #111; }
+    .page { fill: #eee; }
+    .ink  { fill: #111; }
+    /* El icono se adapta al tema del navegador */
+    @media (prefers-color-scheme: light) {
+      .bg   { fill: #ededed; }
+      .page { fill: #111; }
+      .ink  { fill: #ededed; }
+    }
+  </style>
+
+  <rect class="bg" width="64" height="64" rx="12"/>
+
+  <!-- Libro abierto: dos páginas que se unen en el lomo central -->
+  <path class="page" d="M7 15c10-4 19-3 25 3v35c-6-6-15-7-25-3z"/>
+  <path class="page" d="M57 15c-10-4-19-3-25 3v35c6-6 15-7 25-3z"/>
+
+  <!-- Un glifo latino y uno CJK: "diccionario de traducción" -->
+  <text class="ink" x="19.5" y="39" font-size="17" font-weight="700"
+        text-anchor="middle" font-family="Helvetica, Arial, sans-serif">A</text>
+  <text class="ink" x="44.5" y="39" font-size="16" font-weight="700" text-anchor="middle"
+        font-family="'Noto Sans CJK SC','Microsoft YaHei','Yu Gothic','Hiragino Sans',sans-serif">文</text>
+</svg>
